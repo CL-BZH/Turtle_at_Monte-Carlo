@@ -17,10 +17,13 @@ y_lim = 160
 forward_step = 4
 move_angle = np.pi/60
 
-nb_particles = 200
+nb_particles = 196
 assert nb_particles > 0
-nb_landmarks = 5
+nb_landmarks = 4
 assert nb_landmarks > 0
+
+min_dist_between_landmarks = 100 # Should be adapted to the number of landmark
+                                 # and the size of the map
 
 class Landmark:
     def __init__(self, x, y, Id='None', color='black'):
@@ -97,19 +100,16 @@ class Particle(Robot):
         super().__init__("arrow", "blue")
         self.shapesize(0.5, 0.5, 0.5)
         self.penup()
-        #self.hideturtle()
-        #self.showturtle()
-        # Standard deviation for the predict (redefine step_sigma and
-        # theta_sigma of the Robot)
+        # Standard deviation for the predict (redefine step_sigma
+        # and theta_sigma of the Robot)
         self.step_sigma = 1.2
         self.theta_sigma = 0.2
         
         self.weight = 0.0
         # Standard deviation for weighting
-        self.distance_sigma = 0.5
-        #self.distance_weight = 1
-        self.angle_sigma = 0.2
-        #self.angle_weight = 1
+        self.distance_sigma = 16
+        self.angle_sigma = 0.1
+
         
     def predict(self, step, theta):
         step = rd.gauss(step, self.step_sigma)
@@ -120,12 +120,20 @@ class Particle(Robot):
         return np.exp(-((mu-x)**2)/(2*sigma**2)) # No need to normalize
 
     def update_weight(self, robot_measurements):
-        self.weight = 0
+        self.weight = 0.0
+        x, y = self.pos()
+        if ((x > x_lim + 20) or (x < -x_lim - 20) or
+            (x > y_lim + 20) or (x < -y_lim - 20)):
+            # Particle is outside bounds
+            return
+        
         for robot_meas in robot_measurements:
             robot_dist = robot_meas.distance
             robot_angle = robot_meas.angle
-            best_weight = 0
-            print(f"Robot meas for landmark {robot_meas.landmark_id}")
+            best_weight = 0.0
+            distance_weight = 0.0
+            angle_weight = 0.0
+            #print(f"Robot meas for landmark {robot_meas.landmark_id}")
             selected_landmark = 0
             for meas in self.measurements:
                 # Just select the particle measurement that best match
@@ -137,16 +145,19 @@ class Particle(Robot):
                 diff_angle = abs(robot_angle - particle_angle)
                 if diff_angle > np.pi:
                     diff_angle = diff_angle - 2*np.pi
-                weight = self.probability_density_function(robot_dist,
+                distance_weight = self.probability_density_function(robot_dist,
                                                            self.distance_sigma,
                                                            particle_dist)
-                weight *= self.probability_density_function(0,
-                                                            self.angle_sigma,
-                                                            diff_angle)
+                #print(f"distance weight: {distance_weight}")
+                angle_weight = self.probability_density_function(0,
+                                                                 self.angle_sigma,
+                                                                 diff_angle)
+                #print(f"angle weight: {angle_weight}")
+                weight = distance_weight * angle_weight
                 if weight > best_weight:
                     best_weight = weight
                     selected_landmark = meas.landmark_id
-            print(f"\tParticle meas landmark {selected_landmark}")        
+            #print(f"\tParticle meas landmark {selected_landmark}")        
             self.weight += best_weight
 
             
@@ -251,7 +262,7 @@ class Env:
                     dist = np.sqrt((x-landmark.x)**2 + (y-landmark.y)**2)
                     if dist < min_dist:
                         min_dist = dist
-                if min_dist > 50:
+                if min_dist > min_dist_between_landmarks:
                     break
             self.landmarks += [Landmark(x,y, i)]    
             self.robot.goto(x, y)
@@ -265,20 +276,6 @@ class Env:
         self.robot.down()
         self.wn.update()
         self.wn.tracer(1)    
-        
-    def spread_particles_0(self):
-        for particle in self.particles:
-            particle.reset()
-        self.particles.clear()
-        for _ in range(nb_particles):
-            particle = Particle()
-            x = rd.uniform(-x_lim, x_lim)
-            y = rd.uniform(-y_lim, y_lim)
-            theta = rd.uniform(0, math.pi * 2)
-            particle.set(x, y, theta)
-            particle.showturtle()
-            self.particles += [particle]
-
          
     def spread_particles(self):
         for particle in self.particles:
@@ -355,13 +352,16 @@ class Env:
             cumulative_weights.append(total_weight)
 
         print(f"Resampling count: {self.resampling_count}, Max weight: {max_weight}")
-        if self.resampling_count > 20 and max_weight < 2:
-            print(f"Spread particles. max weight = {max_weight}")
+        if ((self.resampling_count > 6 and max_weight < 0.95) or
+            (self.resampling_count > 12 and max_weight < 2)):
+            print(f"+Spread particles+")
             self.spread_particles()
             self.resampling_count = 0
             return
 
-        #if max_weight > 3:
+        if max_weight > 2.6:
+            # Reset
+            self.resampling_count = 0
             #print(f"Converged. max weigth: {max_weight}")
             
         interval_length = total_weight / nb_particles
@@ -382,7 +382,7 @@ class Env:
         for particle in self.particles:
             particle.reset()
         self.particles.clear()
-        self.particles = resampled_particles 
+        self.particles = resampled_particles[:] 
         self.wn.tracer(1)
         
     def run(self):
