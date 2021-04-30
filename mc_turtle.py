@@ -10,21 +10,6 @@ import bisect
 import itertools
 
 
-screen_width = 450
-screen_height = 450
-x_lim = 160
-y_lim = 160
-forward_step = 4
-move_angle = np.pi/60
-
-nb_particles = 256
-assert nb_particles > 0
-nb_landmarks = 4
-assert nb_landmarks > 0
-
-min_dist_between_landmarks = 100 # Should be adapted to the number of landmark
-                                 # and the size of the map
-
 class Landmark:
     def __init__(self, x, y, Id='None', color='black'):
         self.x = x
@@ -32,7 +17,104 @@ class Landmark:
         self.color = color
         self.id = Id
 
+    def draw(self, wn):
+        t = turtle.Turtle()
+        t.radians()
+        t.hideturtle()
+        t.up()
+        t.goto(self.x, self.y)
+        t.down()
+        t.dot(10)
+        wn._turtles.remove(t)
+        
+class Floorplan:
+    def __init__(self, screen_width=450, screen_height=450,
+                 x_lim=160, y_lim=160, nb_landmarks=4):      
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.x_lim = x_lim
+        self.y_lim = y_lim
+        assert nb_landmarks > 0
+        self.nb_landmarks = nb_landmarks
+        self.landmarks = []
+        
+    def set_screen(self, title): 
+        self.wn = turtle.Screen()
+        self.wn.setup(self.screen_width, self.screen_height)
+        self.wn.title(title)
 
+    def bind_keys(self, key_bindings):
+        for key, function in key_bindings.items():
+            self.wn.onkey(function, key)
+
+    def is_within_bounderies(self, x, y, margin=0):
+        x_lim = self.x_lim + margin
+        y_lim = self.y_lim + margin
+        if ((x < -x_lim) or (x > x_lim) or (y < -y_lim) or (y > y_lim)):
+            return False
+        return True
+    
+    def remove_turtle(self, t):
+        """
+        Delete the turtle t.
+        """
+        self.wn._turtles.remove(t)
+        
+    def draw_bounderies(self):
+        # Draw the bounderies
+        self.wn.tracer(0)
+        t = turtle.Turtle()
+        t.radians()
+        t.hideturtle()
+        t.up()
+        t.goto(-self.x_lim - 2, -self.y_lim - 2)
+        print(f"boundery start: {self.x_lim}, {self.y_lim}")
+        t.color('red')
+        t.setheading(np.pi/2)
+        t.down()
+        for _ in range(2):
+            t.forward(2*self.x_lim + 4)
+            print(f"boundery forward: {2*self.x_lim + 4}")
+            t.right(np.pi/2)
+            t.forward(2*self.y_lim + 4)
+            t.right(np.pi/2)
+        self.wn.update()
+        self.remove_turtle(t)
+        self.wn.tracer(1)
+
+    def draw_landmarks(self, min_spacing=0, landmarks=None):
+        # Draw the landmarks
+        self.wn.tracer(0)
+        if landmarks == None:
+            lim_x = 0.85 * self.x_lim
+            lim_y = 0.85 * self.y_lim
+            x = rd.uniform(-lim_x, lim_x)
+            y = rd.uniform(-lim_y, lim_y)
+            self.landmarks += [Landmark(x,y, 0)]
+            print(f"Landmark 0: ({x},{y})")
+            self.landmarks[0].draw(self.wn)
+            for i in range(1, self.nb_landmarks):
+                while True:
+                    x = rd.uniform(-lim_x, lim_x)
+                    y = rd.uniform(-lim_y, lim_y)
+                    min_dist = 1000
+                    for landmark in self.landmarks:
+                        dist = np.sqrt((x-landmark.x)**2 + (y-landmark.y)**2)
+                        if dist < min_dist:
+                            min_dist = dist
+                    # Enforce a minimum space between landmarks
+                    if min_dist > min_spacing:
+                        break
+                self.landmarks += [Landmark(x,y, i)]    
+                self.landmarks[-1].draw(self.wn)
+                print(f"Landmark {i}: ({x},{y})")
+        else:
+            for landmark in landmarks:
+                landmark.draw(self.wn)
+                self.landmarks += [landmark]  
+        self.wn.tracer(1)
+
+        
 class Measurement:
     def __init__(self, distance, angle, Id='None'):
         self.distance = distance
@@ -62,14 +144,14 @@ class Robot(Turtle):
          self.setposition(x, y)
          self.setheading(theta)
          
-    def move(self, step, theta):
+    def move(self, step, theta, inside_bounderies):
         #self.right(theta)  
         #self.forward(step)
         self.x, self.y = self.pos()
         theta = self.heading() + theta
         x = self.x + step * np.cos(theta)
         y = self.y + step * np.sin(theta)
-        if ((x < -x_lim) or (x > x_lim) or (y < -y_lim) or (y > y_lim)):
+        if (inside_bounderies(x, y) == False):
             theta += np.pi/2
             x = self.x + step * np.cos(theta)
             y = self.y + step * np.sin(theta)
@@ -78,10 +160,10 @@ class Robot(Turtle):
         self.setheading(self.theta)
 
 
-    def move_with_error(self, step, theta):
+    def move_with_error(self, step, theta, inside_bounderies):
         theta = rd.gauss(theta, self.theta_sigma)
         step = rd.gauss(step, self.step_sigma)
-        self.move(step, theta)
+        self.move(step, theta, inside_bounderies)
         
     # Measurement is perfectly accurate even though
     # we are assuming it isn't.
@@ -104,10 +186,10 @@ class Robot(Turtle):
                    print(self.measurements[-1])
 
 
-
 class Particle(Robot):
-    def __init__(self):
+    def __init__(self, floorplan):
         super().__init__("arrow", "blue")
+        self.floorplan = floorplan
         self.shapesize(0.5, 0.5, 0.5)
         self.fillcolor("")
         self.penup()
@@ -146,8 +228,7 @@ class Particle(Robot):
     def update_weight(self, robot_measurements):
         self.weight = 0.0
         x, y = self.pos()
-        if ((x > x_lim + 20) or (x < -x_lim - 20) or
-            (x > y_lim + 20) or (x < -y_lim - 20)):
+        if self.floorplan.is_within_bounderies(x, y, 10) == False:
             # Particle is outside bounds
             return
         
@@ -184,139 +265,44 @@ class Particle(Robot):
             #print(f"\tParticle meas landmark {selected_landmark}")        
             self.weight += best_weight
 
-            
-    def update_weight_0(self, robot_measurements):
-        self.weight = 0
-        best_weight = 0
-        length = min(len(robot_measurements), len(self.measurements))
-        robot_measurements.sort(key=lambda x: (x.distance, x.angle))
-        print(f"Robot meas for landmarks: ", end='')
-        for meas in robot_measurements:
-            print(f"{meas.landmark_id} ", end='')
-        print('\n')    
-        self.measurements.sort(key=lambda x: (x.distance, x.angle))
-        print(f"Measurements length: {length}")
-        robot_measurements = robot_measurements[:length]
-        self.measurements = self.measurements[:length]
-        best_match = self.measurements
-        for p_measurements in list(itertools.permutations(self.measurements)):
-            for i in range(len(p_measurements)):
-                delta_distance = (robot_measurements[i].distance
-                                  - p_measurements[i].distance)
-                weight = self.probability_density_function(0,
-                                                           self.distance_sigma,
-                                                           delta_distance)
-                diff_angle = abs(robot_measurements[i].angle
-                                 - p_measurements[i].angle)
-                if diff_angle > np.pi:
-                    diff_angle = diff_angle - 2*np.pi
-                weight *= self.probability_density_function(0,
-                                                            self.angle_sigma,
-                                                            diff_angle)
-                if weight > best_weight:
-                    best_weight = weight
-                    best_match = p_measurements
-        #best_weight /= length
-        self.weight = best_weight
-        print(f"Particle best match landmarks: ", end='')
-        for meas in best_match:
-            print(f"{meas.landmark_id} ", end='')
-        print('\n')
+ 
         
-class Env:
-    def __init__(self):
-        self.wn = turtle.Screen()
-        self.wn.setup(screen_width, screen_height)
-        self.wn.title("Tracking Turtle")
-        # Pause when spacebar is pressed
-        self.wn.onkey(self.pause, "space")
-        # Quit when 'q' key is pressed
-        self.wn.onkey(self.end, "q")
-
+class Simulation:
+    def __init__(self, floorplan, nb_particles):
+        self.floorplan = floorplan
+        
+        # Number of particles
+        assert nb_particles > 0
+        self.nb_particles = nb_particles
+        
         # Create the robot
         self.robot = Robot("turtle", "lime")
+        self.robot.color('lime')    
+        self.robot.goto(0, 0)
+        self.robot.showturtle()
+        self.robot.down()
+        self.floorplan.wn.update()
         
         # The particles
         self.particles = []
         self.resampling_count = 0
-
-        # Draw the bounderies for the particles
-        self.robot.hideturtle()
-        self.wn.tracer(0)
-        self.robot.up()
-        self.robot.goto(-x_lim - 2, -y_lim - 2)
-        self.robot.color('red')
-        self.robot.setheading(np.pi/2)
-        self.robot.down()
-        for _ in range(2):
-            self.robot.forward(2*x_lim + 4)
-            self.robot.right(np.pi/2)
-            self.robot.forward(2*y_lim + 4)
-            self.robot.right(np.pi/2)
-        self.robot.up()
-        self.robot.color('lime')    
-        self.robot.goto(0, 0)
-        self.robot.showturtle()
-        self.robot.down()
-        self.wn.update()
-        self.wn.tracer(1)
-
-        # Draw the landmarks
-        self.robot.hideturtle()
-        self.wn.tracer(0)
-        self.robot.color('black') 
-        lim_x = 0.75 * x_lim
-        lim_y = 0.75 * y_lim
-        self.landmarks = []
-        x = rd.uniform(-lim_x, lim_x)
-        y = rd.uniform(-lim_y, lim_y)
-        self.landmarks += [Landmark(x,y, 0)]
-        print(f"Landmark 0: ({x},{y})")
-        self.robot.up()
-        self.robot.goto(x, y)
-        self.robot.down()
-        self.robot.dot(10)
-        for i in range(1, nb_landmarks):
-            self.robot.up()
-            while True:
-                x = rd.uniform(-lim_x, lim_x)
-                y = rd.uniform(-lim_y, lim_y)
-                min_dist = 1000
-                for landmark in self.landmarks:
-                    dist = np.sqrt((x-landmark.x)**2 + (y-landmark.y)**2)
-                    if dist < min_dist:
-                        min_dist = dist
-                if min_dist > min_dist_between_landmarks:
-                    break
-            self.landmarks += [Landmark(x,y, i)]    
-            self.robot.goto(x, y)
-            self.robot.down()
-            self.robot.dot(10)
-            print(f"Landmark {i}: ({x},{y})")
-        self.robot.up()
-        self.robot.color('lime')    
-        self.robot.goto(0, 0)
-        self.robot.showturtle()
-        self.robot.down()
-        self.wn.update()
-        self.wn.tracer(1)    
          
     def spread_particles(self):
         for particle in self.particles:
             particle.reset()
-            self.wn._turtles.remove(particle)
+            self.floorplan.remove_turtle(particle)
         self.particles.clear()
-        x = 2 * x_lim
-        y = 2 * y_lim
-        si = (x * y) / nb_particles
+        x = 2 * self.floorplan.x_lim
+        y = 2 * self.floorplan.y_lim
+        si = (x * y) / self.nb_particles
         xi = np.sqrt(si * x / y)
         yi = xi * y / x
-        x0 = rd.uniform(-x_lim, -x_lim + xi)
-        y0 = rd.uniform(-y_lim, -y_lim + yi)
+        x0 = rd.uniform(-self.floorplan.x_lim, -self.floorplan.x_lim + xi)
+        y0 = rd.uniform(-self.floorplan.y_lim, -self.floorplan.y_lim + yi)
         particles_count = 0
         for i in range(int(round((x/xi)))): 
             for j in range(int(round((y/yi)))):
-                particle = Particle()
+                particle = Particle(self.floorplan)
                 pos_x = x0 + i * xi
                 pos_y = y0 + j * yi
                 theta = rd.uniform(0, math.pi * 2)
@@ -324,27 +310,31 @@ class Env:
                 particle.showturtle()
                 self.particles += [particle]
                 particles_count += 1
-        print(f"Total number of particle: {particles_count}")
-            
+        # Adjust the number of particles
+        self.nb_particles = particles_count
+        print(f"Total number of particle: {self.nb_particles}")
+       
         
     def init_particles(self):
-        self.wn.tracer(0)
+        self.floorplan.wn.tracer(0)
         self.spread_particles()
-        self.wn.tracer(1)
+        self.floorplan.wn.tracer(1)
         
-    def move(self):
+    def move(self, forward_step, move_angle, with_error=True):
         """
-        The trajectory that the robot would do if the move were without
-        error is an 8. (replace move_with_error() below with move())
+        Note: replace move_with_error() below with move() to move
+        without error.
         """
-        self.wn.tracer(0)
-        x, y = self.robot.pos()
-        if x**2 + y**2 < 0.1:
-            global move_angle
-            move_angle *= -1
+        self.floorplan.wn.tracer(0)
         x, y = self.robot.pos()
         heading = self.robot.heading()
-        self.robot.move_with_error(forward_step, move_angle)
+        if with_error == True:
+            self.robot.move_with_error(forward_step, move_angle,
+                                       self.floorplan.is_within_bounderies)
+        else:
+            self.robot.move(forward_step, move_angle,
+                            self.floorplan.is_within_bounderies)
+        # Update the particles (predict)
         x_new, y_new = self.robot.pos()
         dx = x_new-x
         dy = y_new-y
@@ -356,29 +346,28 @@ class Env:
             while angle <= -2*np.pi:
                 angle += 2*np.pi    
         step = np.sqrt(dx*dx + dy*dy)
-        #print(f"step: {step} versus {forward_step}")
         for particle in self.particles:
             particle.predict(step, angle)
-        self.wn.tracer(1)
+        self.floorplan.wn.tracer(1)
 
     def measure(self):
-        self.wn.tracer(0)
-        self.robot.measure(self.landmarks, False)
-        self.wn.tracer(1)
+        self.floorplan.wn.tracer(0)
+        self.robot.measure(self.floorplan.landmarks, False)
+        self.floorplan.wn.tracer(1)
 
     def updates_particles_weights(self):
-        self.wn.tracer(0)
+        self.floorplan.wn.tracer(0)
         for particle in self.particles:
-            particle.measure(self.landmarks, False)
+            particle.measure(self.floorplan.landmarks, False)
             particle.update_weight(self.robot.measurements)
-        self.wn.tracer(1)
+        self.floorplan.wn.tracer(1)
         
     def resample_particles(self):
         """
         Perform systematic resampling and if the max weight is too low
         then redistribute the particles uniformly
         """
-        self.wn.tracer(0)
+        self.floorplan.wn.tracer(0)
         
         max_weight = 0
     
@@ -396,21 +385,21 @@ class Env:
         print(f"Resampling count: {self.resampling_count}, Max weight: {max_weight}")
         if max_weight < 0.95:
             self.resampling_count += 1
-            if self.resampling_count > 6:
+            if self.resampling_count > 7:
                 print(f"+Spread particles+")
                 self.spread_particles()
                 self.resampling_count = 0
                 return
         elif max_weight < 1.9:
             self.resampling_count += 1
-            if self.resampling_count > 12:
+            if self.resampling_count > 14:
                 print(f"+Spread particles+")
                 self.spread_particles()
                 self.resampling_count = 0
                 return
         elif max_weight < 2.8:
             self.resampling_count += 1
-            if self.resampling_count > 27:
+            if self.resampling_count > 28:
                 print(f"+Spread particles+")
                 self.spread_particles()
                 self.resampling_count = 0
@@ -419,10 +408,10 @@ class Env:
             self.resampling_count = 0
             #print(f"Converged. max weigth: {max_weight}")
             
-        interval_length = total_weight / nb_particles
+        interval_length = total_weight / self.nb_particles
         s = rd.uniform(0, interval_length)
 
-        for k in range(nb_particles):
+        for k in range(self.nb_particles):
             u = s + k * interval_length
             lower_bound_idx = bisect.bisect_left(cumulative_weights, u)
             particle = self.particles[lower_bound_idx]
@@ -430,34 +419,46 @@ class Env:
             x += rd.gauss(0, particle.step_sigma)
             y += rd.gauss(0, particle.step_sigma)
             theta = particle.heading() + rd.gauss(0, particle.theta_sigma)
-            new_particle = Particle()
+            new_particle = Particle(self.floorplan)
             new_particle.set(x, y, theta)
             resampled_particles.append(new_particle)
 
         for particle in self.particles:
             particle.reset()
-            self.wn._turtles.remove(particle)
+            self.floorplan.remove_turtle(particle)
         self.particles.clear()
         self.particles = resampled_particles 
-        self.wn.tracer(1)
+        self.floorplan.wn.tracer(1)
+
         
-    def run(self):
+    def run(self, with_error):
+        self.with_error = with_error
         self.status = 'running'
-        self.wn.listen()
+        self.floorplan.wn.listen()
         for particle in self.particles:
             particle.showturtle()    
         self.robot.setheading(0)
+        # The trajectory that the robot would do if move
+        # without error is an 8.
+        # Step and angle for looping on a 8 shape:
+        step = 4
+        angle = np.pi/60
         while True:
-            self.move()
+            self.move(step, angle, self.with_error)
             self.measure()
             self.updates_particles_weights()
             self.resample_particles()
             self.pausing()
+            # Second loop of the 8 shape (when move without error)
+            if self.with_error == False:
+                x, y = self.robot.pos()
+                if x**2 + y**2 < 0.1:
+                    angle *= -1
     
     def pausing(self):
         while self.status == 'pause':
             time.sleep(0.5)
-            self.wn.update()
+            self.floorplan.wn.update()
             
     def pause(self):
         if (self.status == 'running'):
@@ -467,13 +468,5 @@ class Env:
         print(self.status)
 
     def end(self):
-        self.wn.bye()
+        self.floorplan.wn.bye()
 
-        
-def main(args=None):
-    sim = Env()
-    sim.init_particles()
-    sim.run()
-
-if __name__ == "__main__":
-    main()
