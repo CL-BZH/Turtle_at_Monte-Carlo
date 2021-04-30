@@ -19,6 +19,7 @@ class Landmark:
 
     def draw(self, wn):
         t = turtle.Turtle()
+        t.color(self.color)
         t.radians()
         t.hideturtle()
         t.up()
@@ -68,13 +69,11 @@ class Floorplan:
         t.hideturtle()
         t.up()
         t.goto(-self.x_lim - 2, -self.y_lim - 2)
-        print(f"boundery start: {self.x_lim}, {self.y_lim}")
         t.color('lightgrey')
         t.setheading(np.pi/2)
         t.down()
         for _ in range(2):
             t.forward(2*self.x_lim + 4)
-            print(f"boundery forward: {2*self.x_lim + 4}")
             t.right(np.pi/2)
             t.forward(2*self.y_lim + 4)
             t.right(np.pi/2)
@@ -223,10 +222,6 @@ class Particle(Robot):
 
     def update_weight(self, robot_measurements):
         self.weight = 0.0
-        x, y = self.pos()
-        if self.floorplan.is_within_bounderies(x, y, 10) == False:
-            # Particle is outside bounds
-            return
         
         for robot_meas in robot_measurements:
             robot_dist = robot_meas.distance
@@ -260,7 +255,6 @@ class Particle(Robot):
                     selected_landmark = meas.landmark_id
             #print(f"\tParticle meas landmark {selected_landmark}")        
             self.weight += best_weight
-
  
         
 class Simulation:

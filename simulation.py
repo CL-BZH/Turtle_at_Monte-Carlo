@@ -16,10 +16,10 @@ def main(args=None):
     y_lim = 160
     nb_landmarks = 4
     
-    landmarks = [Landmark(-39.9, 1.64, 0)]
-    landmarks += [Landmark(59.3, -39.8, 1)]
-    landmarks += [Landmark(62.3, 117.1, 2)]
-    landmarks += [Landmark(-58.2, 103.15, 3)]
+    landmarks = [Landmark(-39.9, 1.64, 0, '#ffd700')]
+    landmarks += [Landmark(59.3, -39.8, 1, '#ffa500')]
+    landmarks += [Landmark(62.3, 117.1, 2, '#8a2be2')]
+    landmarks += [Landmark(-58.2, 103.15, 3, '#ff7f50')]
 
     min_dist_between_landmarks = 100
     
@@ -28,6 +28,7 @@ def main(args=None):
     floorplan.set_screen("Tracking the turtle")
     floorplan.draw_bounderies()
     floorplan.draw_landmarks(min_dist_between_landmarks, landmarks)
+    #floorplan.draw_landmarks(min_dist_between_landmarks)
     
     # Intentiate a simulation
     sim = Simulation(floorplan, 256)
