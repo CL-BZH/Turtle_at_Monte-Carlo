@@ -17,7 +17,7 @@ y_lim = 160
 forward_step = 4
 move_angle = np.pi/60
 
-nb_particles = 196
+nb_particles = 256
 assert nb_particles > 0
 nb_landmarks = 4
 assert nb_landmarks > 0
@@ -45,28 +45,38 @@ class Measurement:
 
         
 class Robot(Turtle):
-    def __init__(self, shape, color):
+    def __init__(self, shape, color=None):
         super().__init__(shape=shape)
-        #self.up()
-        self.color(color)
+        if color is not None:
+            self.color(color)
         self.radians()
         self.speed(10)
         self.max_meas_range = 200
         self.measurements = []
         self.theta_sigma = 0.2
         self.step_sigma = 0.5
+        self.x, self.y = self.pos()
+        self.theta = self.heading()
         
     def set(self, x, y, theta):
          self.setposition(x, y)
          self.setheading(theta)
          
     def move(self, step, theta):
-        self.right(theta)  
-        self.forward(step)
-        #self.x += forward_step * np.cos(theta)
-        #self.y += forward_step * np.sin(theta)
-        #self.theta += theta
-        #self.set(self.x, self.y, self.theta)
+        #self.right(theta)  
+        #self.forward(step)
+        self.x, self.y = self.pos()
+        theta = self.heading() + theta
+        x = self.x + step * np.cos(theta)
+        y = self.y + step * np.sin(theta)
+        if ((x < -x_lim) or (x > x_lim) or (y < -y_lim) or (y > y_lim)):
+            theta += np.pi/2
+            x = self.x + step * np.cos(theta)
+            y = self.y + step * np.sin(theta)
+        self.x, self.y, self.theta = x, y, theta
+        self.goto(self.x, self.y)
+        self.setheading(self.theta)
+
 
     def move_with_error(self, step, theta):
         theta = rd.gauss(theta, self.theta_sigma)
@@ -99,18 +109,32 @@ class Particle(Robot):
     def __init__(self):
         super().__init__("arrow", "blue")
         self.shapesize(0.5, 0.5, 0.5)
+        self.fillcolor("")
         self.penup()
         # Standard deviation for the predict (redefine step_sigma
         # and theta_sigma of the Robot)
-        self.step_sigma = 1.2
+        self.step_sigma = 1.1
         self.theta_sigma = 0.2
         
         self.weight = 0.0
         # Standard deviation for weighting
-        self.distance_sigma = 16
+        self.distance_sigma = 20 #16
         self.angle_sigma = 0.1
 
-        
+    def move(self, step, theta):
+        """
+        Redefine the robot move() function since for particles
+        there is no change of move for the bounderies.
+        When a particle cross too much a boundery its weight will
+        be set to 0 in update_weight().
+        """
+        self.x, self.y = self.pos()
+        self.theta = self.heading() + theta
+        self.x += step * np.cos(self.theta)
+        self.y += step * np.sin(self.theta)
+        self.goto(self.x, self.y)
+        self.setheading(self.theta)
+            
     def predict(self, step, theta):
         step = rd.gauss(step, self.step_sigma)
         theta = rd.gauss(theta, self.theta_sigma)
@@ -280,6 +304,7 @@ class Env:
     def spread_particles(self):
         for particle in self.particles:
             particle.reset()
+            self.wn._turtles.remove(particle)
         self.particles.clear()
         x = 2 * x_lim
         y = 2 * y_lim
@@ -308,14 +333,32 @@ class Env:
         self.wn.tracer(1)
         
     def move(self):
+        """
+        The trajectory that the robot would do if the move were without
+        error is an 8. (replace move_with_error() below with move())
+        """
         self.wn.tracer(0)
         x, y = self.robot.pos()
         if x**2 + y**2 < 0.1:
             global move_angle
             move_angle *= -1
-        self.robot.move(forward_step, move_angle)   
+        x, y = self.robot.pos()
+        heading = self.robot.heading()
+        self.robot.move_with_error(forward_step, move_angle)
+        x_new, y_new = self.robot.pos()
+        dx = x_new-x
+        dy = y_new-y
+        angle = np.pi/2
+        if abs(x_new-x) > 0.0001:
+            angle = math.atan2(dy, dx) - heading
+            while angle >= 2*np.pi:
+                angle -= 2*np.pi
+            while angle <= -2*np.pi:
+                angle += 2*np.pi    
+        step = np.sqrt(dx*dx + dy*dy)
+        #print(f"step: {step} versus {forward_step}")
         for particle in self.particles:
-            particle.predict(forward_step, move_angle)
+            particle.predict(step, angle)
         self.wn.tracer(1)
 
     def measure(self):
@@ -337,7 +380,6 @@ class Env:
         """
         self.wn.tracer(0)
         
-        self.resampling_count += 1
         max_weight = 0
     
         resampled_particles = []
@@ -352,15 +394,28 @@ class Env:
             cumulative_weights.append(total_weight)
 
         print(f"Resampling count: {self.resampling_count}, Max weight: {max_weight}")
-        if ((self.resampling_count > 6 and max_weight < 0.95) or
-            (self.resampling_count > 12 and max_weight < 2)):
-            print(f"+Spread particles+")
-            self.spread_particles()
-            self.resampling_count = 0
-            return
-
-        if max_weight > 2.6:
-            # Reset
+        if max_weight < 0.95:
+            self.resampling_count += 1
+            if self.resampling_count > 6:
+                print(f"+Spread particles+")
+                self.spread_particles()
+                self.resampling_count = 0
+                return
+        elif max_weight < 1.9:
+            self.resampling_count += 1
+            if self.resampling_count > 12:
+                print(f"+Spread particles+")
+                self.spread_particles()
+                self.resampling_count = 0
+                return
+        elif max_weight < 2.8:
+            self.resampling_count += 1
+            if self.resampling_count > 27:
+                print(f"+Spread particles+")
+                self.spread_particles()
+                self.resampling_count = 0
+                return
+        else:
             self.resampling_count = 0
             #print(f"Converged. max weigth: {max_weight}")
             
@@ -381,16 +436,17 @@ class Env:
 
         for particle in self.particles:
             particle.reset()
+            self.wn._turtles.remove(particle)
         self.particles.clear()
-        self.particles = resampled_particles[:] 
+        self.particles = resampled_particles 
         self.wn.tracer(1)
         
     def run(self):
         self.status = 'running'
         self.wn.listen()
         for particle in self.particles:
-            particle.showturtle()
-        # Robot go round and round
+            particle.showturtle()    
+        self.robot.setheading(0)
         while True:
             self.move()
             self.measure()
