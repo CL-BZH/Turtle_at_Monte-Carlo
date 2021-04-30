@@ -61,7 +61,7 @@ class Floorplan:
         self.wn._turtles.remove(t)
         
     def draw_bounderies(self):
-        # Draw the bounderies
+        # Draw the (fake) bounderies
         self.wn.tracer(0)
         t = turtle.Turtle()
         t.radians()
@@ -69,7 +69,7 @@ class Floorplan:
         t.up()
         t.goto(-self.x_lim - 2, -self.y_lim - 2)
         print(f"boundery start: {self.x_lim}, {self.y_lim}")
-        t.color('red')
+        t.color('lightgrey')
         t.setheading(np.pi/2)
         t.down()
         for _ in range(2):
@@ -135,8 +135,8 @@ class Robot(Turtle):
         self.speed(10)
         self.max_meas_range = 200
         self.measurements = []
-        self.theta_sigma = 0.2
-        self.step_sigma = 0.5
+        self.theta_sigma = 0.1
+        self.step_sigma = 0.2
         self.x, self.y = self.pos()
         self.theta = self.heading()
         
@@ -144,26 +144,22 @@ class Robot(Turtle):
          self.setposition(x, y)
          self.setheading(theta)
          
-    def move(self, step, theta, inside_bounderies):
+    def move(self, step, theta):
         #self.right(theta)  
         #self.forward(step)
         self.x, self.y = self.pos()
         theta = self.heading() + theta
         x = self.x + step * np.cos(theta)
         y = self.y + step * np.sin(theta)
-        if (inside_bounderies(x, y) == False):
-            theta += np.pi/2
-            x = self.x + step * np.cos(theta)
-            y = self.y + step * np.sin(theta)
         self.x, self.y, self.theta = x, y, theta
         self.goto(self.x, self.y)
         self.setheading(self.theta)
 
 
-    def move_with_error(self, step, theta, inside_bounderies):
+    def move_with_error(self, step, theta):
         theta = rd.gauss(theta, self.theta_sigma)
         step = rd.gauss(step, self.step_sigma)
-        self.move(step, theta, inside_bounderies)
+        self.move(step, theta)
         
     # Measurement is perfectly accurate even though
     # we are assuming it isn't.
@@ -195,7 +191,7 @@ class Particle(Robot):
         self.penup()
         # Standard deviation for the predict (redefine step_sigma
         # and theta_sigma of the Robot)
-        self.step_sigma = 1.1
+        self.step_sigma = 0.8 #1.1
         self.theta_sigma = 0.2
         
         self.weight = 0.0
@@ -326,28 +322,17 @@ class Simulation:
         without error.
         """
         self.floorplan.wn.tracer(0)
-        x, y = self.robot.pos()
+        #x, y = self.robot.pos()
         heading = self.robot.heading()
         if with_error == True:
-            self.robot.move_with_error(forward_step, move_angle,
-                                       self.floorplan.is_within_bounderies)
+            self.robot.move_with_error(forward_step, move_angle)
         else:
-            self.robot.move(forward_step, move_angle,
-                            self.floorplan.is_within_bounderies)
-        # Update the particles (predict)
-        x_new, y_new = self.robot.pos()
-        dx = x_new-x
-        dy = y_new-y
-        angle = np.pi/2
-        if abs(x_new-x) > 0.0001:
-            angle = math.atan2(dy, dx) - heading
-            while angle >= 2*np.pi:
-                angle -= 2*np.pi
-            while angle <= -2*np.pi:
-                angle += 2*np.pi    
-        step = np.sqrt(dx*dx + dy*dy)
+            self.robot.move(forward_step, move_angle)
+        # Update particles positions according to the movement that
+        # the robot was supposed to do (if there would be no movement error)
         for particle in self.particles:
-            particle.predict(step, angle)
+            particle.predict(forward_step, move_angle)
+            
         self.floorplan.wn.tracer(1)
 
     def measure(self):
@@ -444,7 +429,12 @@ class Simulation:
         step = 4
         angle = np.pi/60
         while True:
-            self.move(step, angle, self.with_error)
+            x, y = self.robot.pos()
+            if (self.floorplan.is_within_bounderies(x, y) == False):
+                # This is an artefac to keep the robot within some bounderies
+                self.move(step+1, angle+np.pi, self.with_error)
+            else:    
+                self.move(step, angle, self.with_error)
             self.measure()
             self.updates_particles_weights()
             self.resample_particles()

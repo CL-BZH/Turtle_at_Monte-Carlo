@@ -39,7 +39,8 @@ def main(args=None):
     # Init the particles
     sim.init_particles()
     # And run!
-    sim.run(with_error = False)
+    #sim.run(with_error = False)
+    sim.run(with_error = True)
 
 if __name__ == "__main__":
     main()
