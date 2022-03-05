@@ -27,7 +27,8 @@ def main(args=None):
                           x_lim, y_lim, nb_landmarks)
     floorplan.set_screen("Tracking the turtle")
     floorplan.draw_bounderies()
-    floorplan.draw_landmarks(min_dist_between_landmarks, landmarks)
+    #floorplan.draw_landmarks(min_dist_between_landmarks, landmarks)
+    floorplan.draw_landmarks(min_dist_between_landmarks)
     
     # Intentiate a simulation
     sim = Simulation(floorplan, 256)
